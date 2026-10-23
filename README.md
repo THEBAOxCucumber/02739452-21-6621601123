@@ -135,15 +135,29 @@ docker compose ps
 
 เวลาทั้งหมดบนแดชบอร์ดแสดงเป็น **เวลาประเทศไทย** และปี พ.ศ. (ในฐานข้อมูลเก็บเป็น UTC)
 
-### สาธิตกรณีแหล่งข้อมูลล่ม
+### สาธิตกรณีแหล่งข้อมูลล่ม และกรณีคุณภาพข้อมูลไม่ผ่าน
 
-ใน Airflow กด **Trigger DAG w/ config** แล้วใส่:
+ใน Airflow กด **Trigger DAG w/ config** แล้วใส่ config ตามกรณีที่ต้องการ:
 
-```json
-{"simulate_failure": ["usgs"]}
+| กรณี | config | ผลลัพธ์ |
+|---|---|---|
+| แหล่งข้อมูลล่ม | `{"simulate_failure": ["usgs"]}` | task `usgs.extract` เป็นสีแดง แต่แหล่งอื่นยังโหลด ตัดซ้ำ และตรวจคุณภาพต่อจนจบ — DAG run ยัง **success** สถานะบันทึกเป็น "สำเร็จบางส่วน" |
+| คุณภาพข้อมูลไม่ผ่าน | `{"simulate_quality_failure": true}` | DAG **แตกเส้นทาง** ไปที่ task `quality_failed` (แทน `quality_passed`) สถานะบันทึกเป็น "คุณภาพข้อมูลไม่ผ่าน" |
+
+### เส้นทางของ DAG
+
+```text
+[usgs] [nasa_eonet] [gdacs] [geonet] [reliefweb_api] [phivolcs_html]   ← TaskGroup ละแหล่ง ทำงานขนานกัน
+   extract → transform_validate → load        (แถวที่ไม่ผ่าน validation แยกไปตาราง data_quarantine)
+                         ↓
+             deduplicate_cross_source         (ทำงานเสมอ แม้บางแหล่งล้ม)
+                         ↓
+               data_quality_checks            (branch)
+                 ↙                ↘
+         quality_passed       quality_failed
+                 ↘                ↙
+              record_pipeline_status          (บันทึกสถานะ → แสดงบนแดชบอร์ด)
 ```
-
-ผลลัพธ์: task `usgs.extract` ล้มเหลว แต่แหล่งอื่นยังโหลดข้อมูลได้ สถานะบันทึกเป็น "สำเร็จบางส่วน" และแสดงบนแดชบอร์ด
 
 ### ตรวจข้อมูลในฐานข้อมูล
 

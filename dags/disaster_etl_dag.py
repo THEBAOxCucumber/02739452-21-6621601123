@@ -1,15 +1,19 @@
 """Global Disaster Intelligence ETL.
 
-  [nasa_eonet] [gdacs] [usgs] [reliefweb_api]    <- one TaskGroup per source, run in parallel
-     extract -> transform_validate -> load            (a failed source does not block others)
-                     |
+  [nasa_eonet] [gdacs] [usgs] [geonet] [reliefweb_api] [phivolcs_html]
+     extract -> transform_validate -> load      <- one TaskGroup per source, run in parallel;
+                     |                             invalid rows branch off to data_quarantine;
+                     |                             a failed source does not block the others
           deduplicate_cross_source  (trigger_rule=all_done)
                      |
-             data_quality_checks
-                     |
+             data_quality_checks  (branch)
+               /              \\
+       quality_passed     quality_failed
+               \\              /
              record_pipeline_status (trigger_rule=all_done, always runs)
 
-Trigger with config {"simulate_failure": ["gdacs"]} to demo a source outage.
+Demo config: {"simulate_failure": ["usgs"]} = source outage,
+             {"simulate_quality_failure": true} = take the quality_failed branch.
 """
 from datetime import datetime, timedelta
 import logging
@@ -38,7 +42,7 @@ EXTRACT_TIMEOUT = {"gdacs": timedelta(minutes=15)}
 
 with DAG(
     dag_id="global_disaster_etl",
-    description="EONET + GDACS + USGS + ReliefWeb APIs -> validate -> UPSERT -> PostgreSQL",
+    description="5 APIs + PHIVOLCS web scraping -> validate -> UPSERT -> dedup -> quality branch -> PostgreSQL",
     start_date=datetime(2026, 1, 1),
     # 04:30 UTC: inside the visit window requested by gdacs.org/robots.txt (04:00-06:45 UTC).
     schedule="30 4 * * *",
@@ -54,6 +58,8 @@ with DAG(
     params={
         "simulate_failure": Param([], type="array",
                                   description=f"Sources to fail on purpose: {SOURCES}"),
+        "simulate_quality_failure": Param(False, type="boolean",
+                                          description="Force the quality_failed branch (demo)"),
     },
     tags=["disaster", "etl"],
 ) as dag:
@@ -96,16 +102,30 @@ with DAG(
         log.info("Cross-source duplicates flagged: %s", flagged)
         return flagged
 
-    @task
-    def data_quality_checks(run_id=None):
+    @task.branch
+    def data_quality_checks(run_id=None, params=None, ti=None):
+        """Run the checks and branch: quality_passed or quality_failed."""
         results = postgres.run_quality_checks(run_id)
         for r in results:
             log.info("%-32s %s observed=%s expected %s", r["check_name"],
                      "PASS" if r["passed"] else "FAIL", r["observed_value"], r["expectation"])
         failed = [r["check_name"] for r in results if not r["passed"]]
-        if failed:
-            raise AirflowFailException(f"Data quality checks failed: {failed}")
-        return results
+        if params.get("simulate_quality_failure"):
+            failed.append("simulated_quality_failure")
+        ti.xcom_push(key="failed_checks", value=failed)
+        return "quality_failed" if failed else "quality_passed"
+
+    @task
+    def quality_passed():
+        log.info("All data quality checks passed; data is published to the dashboard.")
+
+    @task
+    def quality_failed(ti=None):
+        failed = ti.xcom_pull(task_ids="data_quality_checks", key="failed_checks")
+        # Failing checks are stored in data_quality_results and shown on the dashboard;
+        # the pipeline status is recorded as 'quality_failed' by record_pipeline_status.
+        log.warning("Data quality checks FAILED: %s", failed)
+        return failed
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
     def record_pipeline_status(dag_run=None, run_id=None, ti=None):
@@ -133,32 +153,35 @@ with DAG(
                             else "did not run"),
                 "started_at": dag_run.start_date,
             })
-        quality_ti = dag_run.get_task_instance("data_quality_checks")
-        quality_ok = quality_ti is not None and quality_ti.state == TaskInstanceState.SUCCESS
+        passed_ti = dag_run.get_task_instance("quality_passed")
+        quality_ok = passed_ti is not None and passed_ti.state == TaskInstanceState.SUCCESS
         if not any(e["status"] == "success" for e in entries):
             overall = "failed"
+        elif not quality_ok:
+            overall = "quality_failed"
         elif any_failed:
             overall = "partial_success"
         else:
-            overall = "success" if quality_ok else "quality_failed"
+            overall = "success"
         entries.append({
             "dag_id": dag_run.dag_id, "dag_run_id": run_id, "source_name": "__overall__",
             "status": overall,
             "records_extracted": sum(e["records_extracted"] for e in entries),
             "records_loaded": sum(e["records_loaded"] for e in entries),
             "records_quarantined": sum(e["records_quarantined"] for e in entries),
-            "message": f"quality_checks={quality_ti.state if quality_ti else 'n/a'}",
+            "message": f"quality_checks={'passed' if quality_ok else 'failed'}",
             "started_at": dag_run.start_date,
         })
         postgres.record_pipeline_runs(entries)
         log.info("Pipeline status: %s", overall)
-        if overall != "success":
-            # Status is saved first; then fail so the DAG run itself shows red in the UI.
-            raise AirflowFailException(f"Pipeline finished with status '{overall}'")
+        if overall == "failed":
+            # Nothing could be loaded at all. A single failed source only marks its own
+            # task red; the run itself carries on and succeeds with the remaining sources.
+            raise AirflowFailException("No source could be loaded")
         return overall
 
     loads = [dag.get_task(f"{s}.load") for s in SOURCES]
     dedup = deduplicate_cross_source()
-    quality = data_quality_checks()
+    branch = data_quality_checks()
     status = record_pipeline_status()
-    loads >> dedup >> quality >> status
+    loads >> dedup >> branch >> [quality_passed(), quality_failed()] >> status

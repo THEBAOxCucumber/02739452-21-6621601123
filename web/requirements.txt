@@ -1,3 +1,5 @@
 streamlit==1.41.1
 pandas==2.2.3
 psycopg2-binary==2.9.10
+altair==5.5.0
+pydeck==0.9.3

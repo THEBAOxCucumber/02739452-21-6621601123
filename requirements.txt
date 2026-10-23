@@ -1,0 +1,9 @@
+# Python dependencies of the ETL pipeline (dags/ + src/).
+# Installed into the Airflow image (airflow/Dockerfile); versions match the
+# apache/airflow:2.10.5-python3.11 constraints so nothing in Airflow is upgraded.
+requests==2.32.3
+beautifulsoup4==4.12.3
+psycopg2-binary==2.9.10
+
+# Web dashboard (web/) has its own list: web/requirements.txt
+# Unit tests (local): pip install -r requirements.txt pytest

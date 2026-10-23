@@ -1,5 +1,10 @@
+# Fixed project name keeps container/volume names stable (data volume: global-disaster-dashboard_postgres_data).
+name: global-disaster-dashboard
+
 x-airflow-common: &airflow-common
-  build: ./airflow
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
   image: disaster-airflow:2.10.5
   env_file: .env
   environment: &airflow-env
@@ -82,8 +87,8 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  dashboard:
-    build: ./dashboard
+  web:
+    build: ./web
     environment:
       DB_HOST: postgres
       DB_PORT: 5432

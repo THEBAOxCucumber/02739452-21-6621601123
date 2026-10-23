@@ -91,7 +91,8 @@
 **1) เข้าโฟลเดอร์โปรเจกต์และสร้างไฟล์ตั้งค่า**
 
 ```powershell
-cd global-disaster-dashboard
+git clone https://github.com/THEBAOxCucumber/02739452-21-6621601123.git
+cd 02739452-21-6621601123
 Copy-Item .env.example .env
 notepad .env
 ```
@@ -166,7 +167,7 @@ SELECT * FROM data_quality_results ORDER BY checked_at DESC LIMIT 6;
 ### รัน unit test
 
 ```powershell
-pip install pytest requests beautifulsoup4 psycopg2-binary
+pip install -r requirements.txt pytest
 python -m pytest -q
 ```
 
@@ -194,8 +195,14 @@ docker compose down -v     # หยุดและลบข้อมูลทั
 ## 4. โครงสร้างโปรเจกต์
 
 ```text
-global-disaster-dashboard/
-├── dags/disaster_etl_dag.py        DAG หลัก (TaskGroup ต่อแหล่ง, retry, timeout, ทำงานต่อแม้บางแหล่งล้ม)
+.
+├── dags/
+│   └── disaster_etl_dag.py         DAG หลัก (TaskGroup ต่อแหล่ง, retry, timeout, ทำงานต่อแม้บางแหล่งล้ม)
+├── web/                            แดชบอร์ด Streamlit ภาษาไทย
+│   ├── app.py
+│   ├── requirements.txt            ไลบรารีของแดชบอร์ด
+│   ├── Dockerfile
+│   └── .streamlit/config.toml      ธีมสี
 ├── src/
 │   ├── extractors/                 ตัวดึงข้อมูลแต่ละแหล่ง
 │   │   ├── usgs_earthquake.py      USGS API
@@ -208,12 +215,13 @@ global-disaster-dashboard/
 │   ├── database/postgres.py        UPSERT, quarantine, ตัดซ้ำข้ามแหล่ง, ตรวจคุณภาพ, สถานะ pipeline
 │   ├── reference/                  ตารางพิกัดกึ่งกลางประเทศ (ODbL)
 │   └── pipeline.py                 ขั้นตอน ETL ที่ DAG เรียกใช้
-├── dashboard/app.py                แดชบอร์ด Streamlit ภาษาไทย
+├── airflow/Dockerfile              image ของ Airflow (ติดตั้งไลบรารีจาก requirements.txt)
 ├── sql/                            สร้างฐานข้อมูลและตาราง
 ├── tests/                          unit test
 ├── docs/                           เอกสารแหล่งข้อมูลและภาพหน้าจอ
-├── docker-compose.yml
-└── .env.example
+├── docker-compose.yml              รวมทุก service: postgres, airflow, web
+├── requirements.txt                ไลบรารี Python ของ ETL pipeline
+└── .env.example                    ตัวอย่างไฟล์ตั้งค่า (คัดลอกเป็น .env)
 ```
 
 ### ตารางในฐานข้อมูล
